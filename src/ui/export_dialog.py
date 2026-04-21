@@ -1,51 +1,39 @@
-"""Export dialog — saves the tab scene as PDF or PNG."""
+"""Export dialog — saves the tabs as A4 PDF."""
 
 from __future__ import annotations
-from pathlib import Path
+from typing import List
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
-    QLabel, QFileDialog, QMessageBox, QProgressBar,
+    QLabel, QFileDialog, QMessageBox, QLineEdit,
 )
-from PySide6.QtCore import Qt, QRectF, QMarginsF
-from PySide6.QtGui import QPainter, QImage, QPageLayout, QPageSize
-from PySide6.QtPrintSupport import QPrinter
-
-try:
-    from PySide6.QtPdf import QPdfWriter
-    _HAS_PDF_WRITER = True
-except ImportError:
-    _HAS_PDF_WRITER = False
+from PySide6.QtCore import Qt
 
 
 class ExportDialog(QDialog):
-    def __init__(self, scene, parent=None):
+    def __init__(self, scene, tab_notes: List, parent=None, default_title: str = "Ocarina Tabs"):
         super().__init__(parent)
         self._scene = scene
+        self._tab_notes = tab_notes
+        self._default_title = default_title
         self.setWindowTitle("Export Tabs")
-        self.setMinimumWidth(340)
+        self.setMinimumWidth(360)
         self._init_ui()
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
 
-        layout.addWidget(QLabel("Choose export format:"))
+        title_row = QHBoxLayout()
+        title_row.addWidget(QLabel("Title:"))
+        self._title_edit = QLineEdit(self._default_title)
+        title_row.addWidget(self._title_edit)
+        layout.addLayout(title_row)
 
-        self._progress = QProgressBar()
-        self._progress.setVisible(False)
-        layout.addWidget(self._progress)
+        layout.addWidget(QLabel("Click below to export as A4 PDF:"))
 
-        btn_row = QHBoxLayout()
-
-        btn_pdf = QPushButton("Export as PDF")
+        btn_pdf = QPushButton("Export as PDF (A4)")
         btn_pdf.clicked.connect(self._export_pdf)
-        btn_row.addWidget(btn_pdf)
-
-        btn_png = QPushButton("Export as PNG")
-        btn_png.clicked.connect(self._export_png)
-        btn_row.addWidget(btn_png)
-
-        layout.addLayout(btn_row)
+        layout.addWidget(btn_pdf)
 
         btn_close = QPushButton("Close")
         btn_close.clicked.connect(self.accept)
@@ -58,49 +46,12 @@ class ExportDialog(QDialog):
         if not path:
             return
         try:
-            printer = QPrinter(QPrinter.HighResolution)
-            printer.setOutputFormat(QPrinter.PdfFormat)
-            printer.setOutputFileName(path)
-            printer.setPageOrientation(QPageLayout.Landscape)
-
-            painter = QPainter()
-            if not painter.begin(printer):
-                raise RuntimeError("Could not open PDF for writing.")
-
-            scene_rect = self._scene.sceneRect()
-            page_rect = QRectF(painter.viewport())
-            scale = min(
-                page_rect.width() / scene_rect.width(),
-                page_rect.height() / scene_rect.height(),
+            from ..export.pdf import export_pdf_a4
+            export_pdf_a4(
+                self._tab_notes,
+                path,
+                title=self._title_edit.text().strip() or "Ocarina Tabs",
             )
-            painter.scale(scale, scale)
-            self._scene.render(painter, source=scene_rect)
-            painter.end()
             QMessageBox.information(self, "Export", f"PDF saved to:\n{path}")
-        except Exception as e:
-            QMessageBox.critical(self, "Export Error", str(e))
-
-    def _export_png(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save PNG", "ocarina_tabs.png", "PNG Images (*.png)"
-        )
-        if not path:
-            return
-        try:
-            scene_rect = self._scene.sceneRect()
-            scale = 2  # 2× for high-DPI
-            img = QImage(
-                int(scene_rect.width() * scale),
-                int(scene_rect.height() * scale),
-                QImage.Format_ARGB32,
-            )
-            img.fill(Qt.transparent)
-            painter = QPainter(img)
-            painter.setRenderHint(QPainter.Antialiasing)
-            painter.scale(scale, scale)
-            self._scene.render(painter)
-            painter.end()
-            img.save(path, "PNG")
-            QMessageBox.information(self, "Export", f"PNG saved to:\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "Export Error", str(e))

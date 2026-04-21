@@ -50,21 +50,25 @@ def ticks_to_duration_label(ticks: int, ticks_per_beat: int) -> str:
         return "𝅝𝅗𝅥"      # whole or longer
 
 
-def generate_tabs(
-    notes: List[NoteEvent],
-    ocarina: OcarinaType,
-    ticks_per_beat: int,
-) -> List[TabNote]:
-    """Map each NoteEvent to a TabNote with fingering information."""
-    tab_notes: List[TabNote] = []
-    for note in notes:
-        fingering = ocarina.get_fingering(note.pitch)
-        tab_notes.append(TabNote(
-            note_name=midi_to_note_name(note.pitch),
-            midi_pitch=note.pitch,
-            fingering=fingering,
-            duration_ticks=note.duration_ticks,
-            duration_label=ticks_to_duration_label(note.duration_ticks, ticks_per_beat),
-            holes=list(ocarina.holes),   # copy for safe rendering
-        ))
-    return tab_notes
+# NOTE: generate_tabs (hole-drawing approach) is retained for reference but
+# is no longer used by the main window.  The font-based pipeline
+# (see font_tab.py / FontTabRenderer) is now the active implementation.
+#
+# def generate_tabs(
+#     notes: List[NoteEvent],
+#     ocarina: OcarinaType,
+#     ticks_per_beat: int,
+# ) -> List[TabNote]:
+#     """Map each NoteEvent to a TabNote with fingering information."""
+#     tab_notes: List[TabNote] = []
+#     for note in notes:
+#         fingering = ocarina.get_fingering(note.pitch)
+#         tab_notes.append(TabNote(
+#             note_name=midi_to_note_name(note.pitch),
+#             midi_pitch=note.pitch,
+#             fingering=fingering,
+#             duration_ticks=note.duration_ticks,
+#             duration_label=ticks_to_duration_label(note.duration_ticks, ticks_per_beat),
+#             holes=list(ocarina.holes),   # copy for safe rendering
+#         ))
+#     return tab_notes

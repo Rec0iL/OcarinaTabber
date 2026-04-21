@@ -23,6 +23,7 @@ class OcarinaPanel(QWidget):
         super().__init__(parent)
         self._notes: list = []
         self._ticks_per_beat: int = 480
+        self._has_generated: bool = False
         self._init_ui()
 
     def _init_ui(self):
@@ -78,6 +79,7 @@ class OcarinaPanel(QWidget):
         layout.addStretch()
 
         self._type_combo.currentTextChanged.connect(self._on_type_changed)
+        self._poly_combo.currentIndexChanged.connect(self._on_settings_changed)
 
         self._pending_transpose: Optional[int] = None
         self._transposed_notes: list = []
@@ -97,9 +99,18 @@ class OcarinaPanel(QWidget):
         return reduce_to_monophonic(notes, strategy)
 
     def _on_type_changed(self, _):
-        self._transposed_notes = []
+        # Preserve any existing transposed notes — re-validate range but keep data
         self._pending_transpose = None
         self._validate()
+        if self._has_generated and self._notes:
+            self._emit_ready()
+
+    def _on_settings_changed(self, _):
+        # Same: keep transposed notes, re-validate, re-emit if already generated
+        self._pending_transpose = None
+        self._validate()
+        if self._has_generated and self._notes:
+            self._emit_ready()
 
     def _validate(self):
         if not self._notes:
@@ -152,6 +163,7 @@ class OcarinaPanel(QWidget):
             notes = self._transposed_notes
         else:
             notes = self._get_monophonic(self._notes)
+        self._has_generated = True
         self.ocarina_ready.emit(oc, notes)
 
     @staticmethod

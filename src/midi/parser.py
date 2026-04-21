@@ -3,7 +3,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import mido
 
 
@@ -42,6 +42,7 @@ class MidiFile:
     path: Path
     ticks_per_beat: int
     tempo: int              # microseconds per beat (default 500000 = 120 BPM)
+    tempo_map: List[Tuple[int, int]]  # [(abs_tick, tempo_us), ...] sorted ascending
     tracks: List[TrackInfo]
 
     @property
@@ -54,13 +55,19 @@ def load_midi(path: str | Path) -> MidiFile:
     path = Path(path)
     mid = mido.MidiFile(str(path))
 
-    tempo = 500_000  # default 120 BPM
-    # Scan for tempo in any track
-    for track in mid.tracks:
-        for msg in track:
+    # Build full tempo map: [(abs_tick, tempo_us), ...] across all tracks.
+    # Tempo events are normally all in track 0 of a format-1 file, but we scan
+    # every track to be safe.  Duplicates at the same tick are deduplicated.
+    _tempo_events: dict[int, int] = {}
+    for raw_track in mid.tracks:
+        abs_tick = 0
+        for msg in raw_track:
+            abs_tick += msg.time
             if msg.type == "set_tempo":
-                tempo = msg.tempo
-                break
+                _tempo_events[abs_tick] = msg.tempo
+    tempo_map: List[Tuple[int, int]] = sorted(_tempo_events.items())
+
+    tempo = tempo_map[0][1] if tempo_map else 500_000  # first tempo, or 120 BPM default
 
     tracks: List[TrackInfo] = []
     for idx, raw_track in enumerate(mid.tracks):
@@ -84,7 +91,8 @@ def load_midi(path: str | Path) -> MidiFile:
             notes=notes,
         ))
 
-    return MidiFile(path=path, ticks_per_beat=mid.ticks_per_beat, tempo=tempo, tracks=tracks)
+    return MidiFile(path=path, ticks_per_beat=mid.ticks_per_beat, tempo=tempo,
+                    tempo_map=tempo_map, tracks=tracks)
 
 
 def _get_channels(raw_track) -> set:
