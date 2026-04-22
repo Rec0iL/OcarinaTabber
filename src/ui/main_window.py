@@ -11,7 +11,6 @@ from PySide6.QtCore import Qt, QElapsedTimer, QTimer
 
 from .midi_panel import MidiPanel
 from .ocarina_panel import OcarinaPanel
-from .canvas_editor import CanvasEditor
 from ..tablature.font_tab import load_ocarina_fonts, generate_font_tabs
 from ..tablature.renderer import FontTabRenderer
 from ..ocarina.models import OcarinaType
@@ -58,9 +57,6 @@ class MainWindow(QMainWindow):
 
         self._ocarina_panel = OcarinaPanel()
         sidebar_tabs.addTab(self._ocarina_panel, "Ocarina")
-
-        self._canvas_editor = CanvasEditor()
-        sidebar_tabs.addTab(self._canvas_editor, "Layout Editor")
 
         splitter.addWidget(sidebar_tabs)
 
@@ -113,7 +109,6 @@ class MainWindow(QMainWindow):
     def _wire_signals(self):
         self._midi_panel.track_selected.connect(self._on_track_selected)
         self._ocarina_panel.ocarina_ready.connect(self._on_generate)
-        self._canvas_editor.layout_changed.connect(self._on_layout_changed)
         self._play_btn_main.clicked.connect(self._midi_panel.play_current_track)
         self._stop_btn_main.clicked.connect(self._midi_panel.stop_current_track)
         self._midi_panel.playback_started.connect(self._on_playback_started)
@@ -129,12 +124,6 @@ class MainWindow(QMainWindow):
         )
 
     def _on_generate(self, ocarina: OcarinaType, notes: list):
-        # Canvas editor still receives the ocarina layout for visual feedback
-        custom_holes = self._canvas_editor.get_current_layout()
-        if custom_holes:
-            ocarina.holes = custom_holes
-        self._canvas_editor.set_ocarina(ocarina)
-
         ticks_per_beat = (
             self._midi_file.ticks_per_beat
             if hasattr(self, "_midi_file") else 480
@@ -145,6 +134,7 @@ class MainWindow(QMainWindow):
         font_notes = generate_font_tabs(
             notes, ocarina.name, ticks_per_beat, tempo=tempo,
             tempo_map=self._midi_file.tempo_map if hasattr(self, "_midi_file") else [],
+            hole_count=ocarina.hole_count,
         )
         self._font_notes = font_notes
         self._play_font_notes = font_notes
@@ -157,9 +147,6 @@ class MainWindow(QMainWindow):
 
         # Add export buttons to status bar dynamically
         self._add_export_actions()
-
-    def _on_layout_changed(self, holes):
-        self._status.showMessage(f"Layout updated — {len(holes)} holes.")
 
     def _on_playback_started(self, midi_file, track, mode: int):
         # mode 0 = single track (compressed timing), 1 = all tracks (original timing)
@@ -213,16 +200,14 @@ class MainWindow(QMainWindow):
         self._tab_renderer.set_active_index(idx)
 
     def _add_export_actions(self):
-        from .export_dialog import ExportDialog
-        if not hasattr(self, "_export_dialog"):
-            btn_export = self._status.findChild(type(None))
-            # Just expose via menu for cleanliness
-            menu_bar = self.menuBar()
-            if not menu_bar.findChild(type(None), "export_menu_added"):
-                file_menu = menu_bar.addMenu("File")
-                file_menu.setObjectName("export_menu_added")
-                export_action = file_menu.addAction("Export Tabs…")
-                export_action.triggered.connect(self._open_export)
+        # Guard: only create the File menu once
+        if hasattr(self, "_file_menu"):
+            return
+        from PySide6.QtWidgets import QMenu
+        self._file_menu = QMenu("File", self)
+        export_action = self._file_menu.addAction("Export Tabs…")
+        export_action.triggered.connect(self._open_export)
+        self.menuBar().addMenu(self._file_menu)
 
     def _open_export(self):
         from .export_dialog import ExportDialog

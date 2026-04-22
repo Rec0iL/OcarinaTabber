@@ -94,10 +94,15 @@ def _tick_to_ms(tick: int, tpb: int, tempo_map: list) -> float:
 # ---------------------------------------------------------------------------
 
 _fonts_loaded = False
+# Family names actually registered on this run (populated by load_ocarina_fonts)
+_loaded_families: set[str] = set()
 
 
 def load_ocarina_fonts() -> None:
-    """Register the ocarina TTF fonts with Qt's font database.
+    """Register all ocarina TTF fonts with Qt's font database.
+
+    Registers fonts for 12-, 7-, 6-, and 4-hole ocarinas (styles 1 and 2)
+    when the corresponding .ttf files are present in the fonts directory.
 
     Call this once after ``QApplication`` is created, before any widget
     that uses the font is constructed.
@@ -105,11 +110,25 @@ def load_ocarina_fonts() -> None:
     global _fonts_loaded
     if _fonts_loaded:
         return
-    for fname in ("Open-12-Hole-Ocarina-1.ttf", "Open-12-Hole-Ocarina-2.ttf"):
-        path = FONTS_DIR / fname
-        if path.exists():
-            QFontDatabase.addApplicationFont(str(path))
+    for holes in (12, 7, 6, 4):
+        for style in (1, 2):
+            fname = f"Open-{holes}-Hole-Ocarina-{style}.ttf"
+            path = FONTS_DIR / fname
+            if path.exists():
+                fid = QFontDatabase.addApplicationFont(str(path))
+                if fid >= 0:
+                    _loaded_families.update(QFontDatabase.applicationFontFamilies(fid))
     _fonts_loaded = True
+
+
+def ocarina_font_family(hole_count: int, style: int) -> str:
+    """Return the Qt font family name for the given hole count and style.
+
+    Falls back to ``'Noto Sans'`` when the dedicated ocarina font has not been
+    loaded (e.g. the .ttf file is not yet present in the fonts directory).
+    """
+    family = f"Open {hole_count} Hole Ocarina {style}"
+    return family if family in _loaded_families else "Noto Sans"
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +192,7 @@ class FontNote:
     font_char: str       # 'A'–'U', or 'x' for out-of-range
     duration_label: str  # e.g. "♩", "♪"
     is_out_of_range: bool
+    hole_count: int = 12              # number of holes on the ocarina (4, 6, 7, 12, …)
     start_ms: float = 0.0             # original absolute start time (ms) — use for all-tracks playback
     compressed_start_ms: float = 0.0  # start time with pauses compressed to PAUSE_THRESHOLD_S
     is_pause: bool = False             # True for synthesised pause frames
@@ -189,6 +209,7 @@ def generate_font_tabs(
     ticks_per_beat: int,
     tempo: int = 500_000,       # microseconds per beat (500000 = 120 BPM)
     tempo_map: list | None = None,  # full [(abs_tick, tempo_us)] list
+    hole_count: int = 12,       # number of holes on the ocarina
 ) -> List[FontNote]:
     """Convert a list of ``NoteEvent`` objects into ``FontNote`` instances.
 
@@ -294,6 +315,7 @@ def generate_font_tabs(
                 font_char="",
                 duration_label="",
                 is_out_of_range=False,
+                hole_count=hole_count,
                 start_ms=prev_end_ms_real,
                 compressed_start_ms=_comp_ms(pause_comp_tick),
                 is_pause=True,
@@ -307,6 +329,7 @@ def generate_font_tabs(
             font_char=char,
             duration_label=ticks_to_duration_label(note.duration_ticks, ticks_per_beat),
             is_out_of_range=(char == 'x'),
+            hole_count=hole_count,
             start_ms=note_start_ms_real,
             compressed_start_ms=_comp_ms(comp_start_tick),
         ))

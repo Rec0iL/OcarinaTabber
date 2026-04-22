@@ -12,6 +12,7 @@ import mido as _mido
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QListWidget, QListWidgetItem, QFileDialog, QFrame, QCheckBox, QComboBox,
+    QSlider, QScrollArea,
 )
 from PySide6.QtCore import Signal, Qt, QProcess, QTimer
 
@@ -46,6 +47,7 @@ class MidiPanel(QWidget):
         self._midi_file: Optional[MidiFile] = None
         self._player_process: Optional[QProcess] = None
         self._temp_midi_path: Optional[str] = None
+        self._track_volumes: dict[int, int] = {}  # track_index -> 0..200 (100 = unity)
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(500)
         self._poll_timer.timeout.connect(self._poll_playback)
@@ -143,11 +145,113 @@ class MidiPanel(QWidget):
         self._ocarina_sound_cb.setStyleSheet("color: #cdd6f4; font-size: 10px;")
         layout.addWidget(self._ocarina_sound_cb)
 
+        # ── Per-track volume section (visible only in All-tracks mode) ──
+        self._vol_section = QWidget()
+        vol_section_layout = QVBoxLayout(self._vol_section)
+        vol_section_layout.setContentsMargins(0, 4, 0, 0)
+        vol_section_layout.setSpacing(2)
+
+        vol_lbl = QLabel("Track Volumes")
+        vol_lbl.setStyleSheet("color: #cdd6f4; font-weight: bold; font-size: 10px;")
+        vol_section_layout.addWidget(vol_lbl)
+
+        hint = QLabel("Drag past 100% to boost beyond original volume")
+        hint.setStyleSheet("color: #6c7086; font-size: 9px;")
+        vol_section_layout.addWidget(hint)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFixedHeight(140)
+        scroll.setStyleSheet(
+            "QScrollArea { background: #181825; border: 1px solid #45475a; }"
+            "QScrollBar:vertical { background: #1e1e2e; width: 8px; }"
+            "QScrollBar::handle:vertical { background: #45475a; border-radius: 4px; }"
+        )
+        self._vol_inner = QWidget()
+        self._vol_inner.setStyleSheet("background: #181825;")
+        self._vol_inner_layout = QVBoxLayout(self._vol_inner)
+        self._vol_inner_layout.setContentsMargins(4, 2, 4, 2)
+        self._vol_inner_layout.setSpacing(1)
+        self._vol_inner_layout.addStretch()
+        scroll.setWidget(self._vol_inner)
+        vol_section_layout.addWidget(scroll)
+
+        self._vol_section.setVisible(False)
+        layout.addWidget(self._vol_section)
+        self._play_mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+
         self._player_status = QLabel("Select a track and press Play")
         self._player_status.setStyleSheet("color: #6c7086; font-size: 10px;")
         self._player_status.setWordWrap(True)
         layout.addWidget(self._player_status)
         layout.addStretch()
+
+    # ── Mode / volume helpers ─────────────────────────────────────────
+    def _on_mode_changed(self, index: int):
+        self._vol_section.setVisible(index == 1)
+
+    def _populate_track_volumes(self):
+        """Rebuild the per-track volume sliders from the current MIDI file."""
+        # Clear old rows (keep the trailing stretch)
+        while self._vol_inner_layout.count() > 1:
+            item = self._vol_inner_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        self._track_volumes.clear()
+        if not self._midi_file:
+            return
+
+        for track in self._midi_file.tracks:
+            self._track_volumes[track.index] = 100
+
+            row = QWidget()
+            row.setStyleSheet("background: transparent;")
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(0, 0, 0, 0)
+            rl.setSpacing(6)
+
+            name = track.name or f"Track {track.index}"
+            tl = QLabel(name)
+            tl.setFixedWidth(110)
+            tl.setStyleSheet("color: #cdd6f4; font-size: 10px;")
+            tl.setToolTip(str(track))
+            rl.addWidget(tl)
+
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(0, 200)
+            slider.setValue(100)
+            slider.setStyleSheet(
+                "QSlider::groove:horizontal { height: 4px; background: #313244; border-radius: 2px; }"
+                "QSlider::handle:horizontal { width: 10px; height: 10px; margin: -3px 0;"
+                "  background: #89b4fa; border-radius: 5px; }"
+                "QSlider::sub-page:horizontal { background: #89b4fa; border-radius: 2px; }"
+            )
+            rl.addWidget(slider, 1)
+
+            pct_label = QLabel("100%")
+            pct_label.setFixedWidth(36)
+            pct_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            pct_label.setStyleSheet("color: #a6e3a1; font-size: 10px;")
+            rl.addWidget(pct_label)
+
+            # Capture track.index in closure
+            def _on_vol_changed(val, idx=track.index, lbl=pct_label):
+                self._track_volumes[idx] = val
+                lbl.setText(f"{val}%")
+                # Tint label red when muted, yellow when boosted
+                if val == 0:
+                    lbl.setStyleSheet("color: #f38ba8; font-size: 10px;")
+                elif val > 100:
+                    lbl.setStyleSheet("color: #f9e2af; font-size: 10px;")
+                else:
+                    lbl.setStyleSheet("color: #a6e3a1; font-size: 10px;")
+
+            slider.valueChanged.connect(_on_vol_changed)
+
+            self._vol_inner_layout.insertWidget(
+                self._vol_inner_layout.count() - 1, row
+            )
 
     # ── File loading ──────────────────────────────────────────────────
     def _open_file(self):
@@ -183,6 +287,7 @@ class MidiPanel(QWidget):
             f"Ticks/beat: {self._midi_file.ticks_per_beat}  |  "
             f"{len(self._midi_file.tracks)} tracks with notes"
         )
+        self._populate_track_volumes()
 
     def _on_track_clicked(self, item: QListWidgetItem):
         track: TrackInfo = item.data(Qt.UserRole)
@@ -277,6 +382,8 @@ class MidiPanel(QWidget):
         If 'Play as Ocarina sound' is checked, only the *selected* track's
         channel is remapped to GM 79; all other channels keep their original
         instruments.  No pause compression — other tracks fill the silence.
+        Per-track volume percentages from the volume sliders are applied via
+        velocity scaling (0-100 % scales down, >100 % boosts, clamped to 127).
         """
         use_ocarina = self._ocarina_sound_cb.isChecked()
         _GM_OCARINA = 79
@@ -284,36 +391,50 @@ class MidiPanel(QWidget):
             raw = _mido.MidiFile(str(self._midi_file.path))
             ch = track.channel
 
-            if not use_ocarina:
-                # No modification needed — just copy to a temp file
-                fd, path = tempfile.mkstemp(suffix=".mid")
-                os.close(fd)
-                raw.save(path)
-                return path
+            # Build a set of raw-track indices that have volume/ocarina overrides
+            # _track_volumes maps TrackInfo.index → pct (TrackInfo.index == raw track index)
+            volumes = dict(self._track_volumes)  # copy
 
-            # Remap only the selected channel to ocarina
             out = _mido.MidiFile(ticks_per_beat=raw.ticks_per_beat, type=raw.type)
-            for raw_track in raw.tracks:
-                has_ch = ch is None or any(
-                    not msg.is_meta and hasattr(msg, 'channel') and msg.channel == ch
+            for raw_idx, raw_track in enumerate(raw.tracks):
+                vol_pct = volumes.get(raw_idx, 100)
+                factor = vol_pct / 100.0
+
+                is_selected_track = any(
+                    not msg.is_meta and hasattr(msg, 'channel')
+                    and (ch is None or msg.channel == ch)
                     for msg in raw_track
                 )
+
                 new_track = _mido.MidiTrack()
-                pc_inserted = False
+                pc_inserted = not use_ocarina or not is_selected_track
+
                 for msg in raw_track:
-                    # Strip existing PC on this channel
-                    if has_ch and not msg.is_meta and msg.type == 'program_change' \
+                    # Strip existing program_change on selected channel when ocarina is on
+                    if use_ocarina and is_selected_track and not msg.is_meta \
+                            and msg.type == 'program_change' \
                             and (ch is None or (hasattr(msg, 'channel') and msg.channel == ch)):
                         continue
-                    # Insert ocarina PC before first non-meta on this channel's track
-                    if has_ch and not pc_inserted and not msg.is_meta:
+
+                    # Insert ocarina PC before first non-meta msg on selected channel
+                    if not pc_inserted and not msg.is_meta:
                         new_track.append(_mido.Message(
                             'program_change',
                             channel=ch if ch is not None else 0,
                             program=_GM_OCARINA, time=0,
                         ))
                         pc_inserted = True
-                    new_track.append(msg)
+
+                    # Apply velocity scaling to note_on / note_off messages
+                    if not msg.is_meta and factor != 1.0 \
+                            and msg.type in ('note_on', 'note_off') \
+                            and hasattr(msg, 'velocity'):
+                        new_vel = int(msg.velocity * factor)
+                        new_vel = max(0, min(127, new_vel))
+                        new_track.append(msg.copy(velocity=new_vel))
+                    else:
+                        new_track.append(msg)
+
                 out.tracks.append(new_track)
 
             fd, path = tempfile.mkstemp(suffix=".mid")
