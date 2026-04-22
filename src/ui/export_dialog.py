@@ -40,8 +40,9 @@ class ExportDialog(QDialog):
         layout.addWidget(btn_close, alignment=Qt.AlignRight)
 
     def _export_pdf(self):
+        default_name = f"{self._default_title}.pdf"
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save PDF", "ocarina_tabs.pdf", "PDF Files (*.pdf)"
+            self, "Save PDF", default_name, "PDF Files (*.pdf)"
         )
         if not path:
             return
