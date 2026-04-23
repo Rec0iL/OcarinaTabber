@@ -96,6 +96,8 @@ def _tick_to_ms(tick: int, tpb: int, tempo_map: list) -> float:
 _fonts_loaded = False
 # Family names actually registered on this run (populated by load_ocarina_fonts)
 _loaded_families: set[str] = set()
+# Maps (hole_count, style) -> actual Qt family name registered for that file
+_family_map: dict[tuple[int, int], str] = {}
 
 
 def load_ocarina_fonts() -> None:
@@ -117,7 +119,10 @@ def load_ocarina_fonts() -> None:
             if path.exists():
                 fid = QFontDatabase.addApplicationFont(str(path))
                 if fid >= 0:
-                    _loaded_families.update(QFontDatabase.applicationFontFamilies(fid))
+                    families = QFontDatabase.applicationFontFamilies(fid)
+                    _loaded_families.update(families)
+                    if families:
+                        _family_map[(holes, style)] = families[0]
     _fonts_loaded = True
 
 
@@ -127,8 +132,7 @@ def ocarina_font_family(hole_count: int, style: int) -> str:
     Falls back to ``'Noto Sans'`` when the dedicated ocarina font has not been
     loaded (e.g. the .ttf file is not yet present in the fonts directory).
     """
-    family = f"Open {hole_count} Hole Ocarina {style}"
-    return family if family in _loaded_families else "Noto Sans"
+    return _family_map.get((hole_count, style), "Noto Sans")
 
 
 # ---------------------------------------------------------------------------
