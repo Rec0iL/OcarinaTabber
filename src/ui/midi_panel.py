@@ -39,7 +39,7 @@ def _dbg(msg: str):
 class MidiPanel(QWidget):
     """Upload a MIDI file and select a track, with per-track playback."""
     track_selected    = Signal(object, object)      # (MidiFile, TrackInfo)
-    playback_started  = Signal(object, object, int)  # (MidiFile, TrackInfo, mode:0=single/1=all)
+    playback_started  = Signal(object, object, int, float)  # (MidiFile, TrackInfo, mode:0=single/1=all, speed_factor)
     playback_stopped  = Signal()
 
     def __init__(self, parent=None):
@@ -48,6 +48,7 @@ class MidiPanel(QWidget):
         self._player_process: Optional[QProcess] = None
         self._temp_midi_path: Optional[str] = None
         self._track_volumes: dict[int, int] = {}  # track_index -> 0..200 (100 = unity)
+        self._speed_pct: int = 100  # playback speed percentage (25–150)
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(500)
         self._poll_timer.timeout.connect(self._poll_playback)
@@ -144,6 +145,44 @@ class MidiPanel(QWidget):
         self._ocarina_sound_cb.setChecked(True)
         self._ocarina_sound_cb.setStyleSheet("color: #cdd6f4; font-size: 10px;")
         layout.addWidget(self._ocarina_sound_cb)
+
+        # ── Playback speed slider ─────────────────────────────────────
+        speed_row = QHBoxLayout()
+        speed_lbl = QLabel("Speed:")
+        speed_lbl.setStyleSheet("color: #cdd6f4; font-size: 10px;")
+        speed_row.addWidget(speed_lbl)
+
+        self._speed_slider = QSlider(Qt.Horizontal)
+        self._speed_slider.setRange(25, 150)
+        self._speed_slider.setValue(100)
+        self._speed_slider.setTickPosition(QSlider.TicksBelow)
+        self._speed_slider.setTickInterval(25)
+        self._speed_slider.setStyleSheet(
+            "QSlider::groove:horizontal { height: 4px; background: #313244; border-radius: 2px; }"
+            "QSlider::handle:horizontal { width: 10px; height: 10px; margin: -3px 0;"
+            "  background: #cba6f7; border-radius: 5px; }"
+            "QSlider::sub-page:horizontal { background: #cba6f7; border-radius: 2px; }"
+        )
+        speed_row.addWidget(self._speed_slider, 1)
+
+        self._speed_val_label = QLabel("100%")
+        self._speed_val_label.setFixedWidth(36)
+        self._speed_val_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._speed_val_label.setStyleSheet("color: #cba6f7; font-size: 10px;")
+        speed_row.addWidget(self._speed_val_label)
+        layout.addLayout(speed_row)
+
+        def _on_speed_changed(val: int):
+            self._speed_pct = val
+            self._speed_val_label.setText(f"{val}%")
+            if val < 100:
+                self._speed_val_label.setStyleSheet("color: #89b4fa; font-size: 10px;")
+            elif val > 100:
+                self._speed_val_label.setStyleSheet("color: #f9e2af; font-size: 10px;")
+            else:
+                self._speed_val_label.setStyleSheet("color: #cba6f7; font-size: 10px;")
+
+        self._speed_slider.valueChanged.connect(_on_speed_changed)
 
         # ── Per-track volume section (visible only in All-tracks mode) ──
         self._vol_section = QWidget()
@@ -329,6 +368,7 @@ class MidiPanel(QWidget):
                     pc_ch = ch if ch is not None else 0
                     filtered.insert(0, _mido.Message('program_change', channel=pc_ch, program=_GM_OCARINA, time=0))
                 filtered = self._compress_pauses(filtered, raw.ticks_per_beat, self._midi_file.tempo)
+                filtered = self._scale_track_tempo(filtered, self._speed_pct)
                 out.tracks.append(filtered)
                 _dbg(f"  type-0: filtered to ch={ch}, {len(filtered)} msgs")
             else:
@@ -347,6 +387,7 @@ class MidiPanel(QWidget):
                         if msg.is_meta:
                             meta_track.append(msg.copy(time=_abs_tick - _prev_meta_abs))
                             _prev_meta_abs = _abs_tick
+                    meta_track = self._scale_track_tempo(meta_track, self._speed_pct)
                     out.tracks.append(meta_track)
                     out.type = 1  # two-track → valid Format-1
                     _dbg(f"  meta track 0: {len(meta_track)} msgs")
@@ -363,6 +404,7 @@ class MidiPanel(QWidget):
                         pc_ch = ch if ch is not None else 0
                         note_track.insert(0, _mido.Message('program_change', channel=pc_ch, program=_GM_OCARINA, time=0))
                     note_track = self._compress_pauses(note_track, raw.ticks_per_beat, self._midi_file.tempo)
+                    note_track = self._scale_track_tempo(note_track, self._speed_pct)
                     out.tracks.append(note_track)
                     _dbg(f"  track {track.index}: {len(note_track)} msgs (ocarina={use_ocarina})")
 
@@ -446,6 +488,25 @@ class MidiPanel(QWidget):
             _dbg(f"ERROR building full MIDI: {e}")
             self._player_status.setText(f"Error preparing MIDI: {e}")
             return None
+
+    @staticmethod
+    def _scale_track_tempo(track: "_mido.MidiTrack", speed_pct: int) -> "_mido.MidiTrack":
+        """Return a copy of *track* with set_tempo meta messages scaled for *speed_pct*.
+
+        Speed < 100 slows playback (larger tempo value = more µs per beat).
+        Speed > 100 speeds up (smaller tempo value).
+        """
+        if speed_pct == 100:
+            return track
+        factor = 100.0 / speed_pct
+        new_track = _mido.MidiTrack()
+        for msg in track:
+            if msg.is_meta and msg.type == 'set_tempo':
+                new_tempo = max(1, int(msg.tempo * factor))
+                new_track.append(msg.copy(tempo=new_tempo))
+            else:
+                new_track.append(msg)
+        return new_track
 
     @staticmethod
     def _compress_pauses(track, ticks_per_beat: int, tempo: int) -> "_mido.MidiTrack":
@@ -534,6 +595,7 @@ class MidiPanel(QWidget):
         self._player_process.finished.connect(self._on_playback_finished)
         self._player_process.errorOccurred.connect(self._on_process_error)
         self._player_process.start(binary, cmd_args)
+        speed_factor = self._speed_pct / 100.0
 
         if not self._player_process.waitForStarted(3000):
             err = self._player_process.errorString()
@@ -548,7 +610,7 @@ class MidiPanel(QWidget):
         label = track.name or f"Track {track.index}"
         self._player_status.setText(f"▶ Playing: {label}  [{binary}]")
         self._poll_timer.start()
-        self.playback_started.emit(self._midi_file, track, mode)
+        self.playback_started.emit(self._midi_file, track, mode, speed_factor)
 
     def _on_process_output(self):
         if not self._player_process:
